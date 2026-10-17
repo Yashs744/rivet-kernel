@@ -4,7 +4,7 @@
 void main(void) {
     while (1) {
     prompt:
-        printf("$ ");
+        printf("rivet-kernel:~$ ");
 
         char cmdline[128];
 
