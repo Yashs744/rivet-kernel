@@ -44,8 +44,8 @@ void pool_init_pages(void) {
      *  └──────────────┘     └──────────────┘     └──────────────┘
      *     0x802cc000          0x802cd000            0x84246000
      */
-    printf("pool_init_pages\n");
-    printf("__free_ram_end:%x\t__free_ram:%x\tnext_paddr:%x\n", __free_ram_end, __free_ram, next_paddr);
+    if (!next_paddr)
+        next_paddr = (paddr_t) __free_ram;
 
     for (paddr_t paddr = (paddr_t) __free_ram_end - PAGE_SIZE; paddr > (paddr_t) next_paddr; paddr -= PAGE_SIZE) {
         pool_free_pages(paddr);
