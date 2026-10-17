@@ -141,7 +141,7 @@ struct process *create_process(const void *image, size_t image_size) {
     // Each process gets its own root table, which is what gives each process its own address space.
 
     // Allocate one zeroed page to be this process's root table
-    uint32_t *page_table = (uint32_t *) alloc_pages(1);
+    uint32_t *page_table = (uint32_t *) pool_alloc_pages();
 
     // Visit every page from the start of the kernel to the end of free RAM, stepping 4 KB at a time
     /*for (paddr_t paddr = (paddr_t) __kernel_base; paddr < (paddr_t) __free_ram_end; paddr += PAGE_SIZE)
