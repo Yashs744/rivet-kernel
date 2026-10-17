@@ -29,6 +29,7 @@ run: all
 	$(QEMU) -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
 	    -drive id=drive0,file=$(BUILD)/disk.tar,format=raw,if=none \
 	    -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+	    -global virtio-mmio.force-legacy=false \
 	    -kernel $(BUILD)/kernel.elf
 
 clean:

@@ -44,7 +44,7 @@ $CC $CFLAGS -Wl,-Tkernel/kernel.ld -Wl,-Map=$BUILD/kernel.map -o $BUILD/kernel.e
 (cd disk && tar cf ../$BUILD/disk.tar --format=ustar *.txt)
 
 # Start QEMU
-$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -global virtio-mmio.force-legacy=false \
     -drive id=drive0,file=$BUILD/disk.tar,format=raw,if=none \
     -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
     -kernel $BUILD/kernel.elf
