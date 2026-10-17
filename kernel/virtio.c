@@ -31,22 +31,17 @@ void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value) {
 }
 
 struct virtio_virtq *virtq_init(unsigned index) {
-    // allocating the queue
-    paddr_t paddr = alloc_pages(align_up(sizeof(struct virtio_virtq), PAGE_SIZE) / PAGE_SIZE);
-    struct virtio_virtq *vq = (struct virtio_virtq *) paddr;
-
-    // remembers which queue this is,
-    vq->queue_index = index;
-    // a shortcut pointer to the device-written counter used.index
-    vq->used_index = (volatile uint16_t *) &vq->used.index;
-
     // Virtqueue Configuration as per the specs
     // 1. Write the virtqueue index to queue_select.
     virtio_reg_write32(VIRTIO_REG_QUEUE_SEL, index);
 
+    // Queue `0` should not be in use
+    if (virtio_reg_read32(VIRTIO_REG_QUEUE_READY))
+        PANIC("VIRTIO: disk should not be ready");
+
     // 2. Read the virtqueue size from queue_size.  This controls how big the virtqueue is.
     // If this field is 0, the virtqueue does not exist.
-    uint32_t max_queue_size = virtio_reg_read64(VIRTIO_REG_QUEUE_NUM_MAX);
+    uint32_t max_queue_size = virtio_reg_read32(VIRTIO_REG_QUEUE_NUM_MAX);
     if (max_queue_size == 0)
         PANIC("VIRTIO: Queue %d does not exist", index);
     if (VIRTQ_ENTRY_NUM > max_queue_size)
@@ -55,9 +50,31 @@ struct virtio_virtq *virtq_init(unsigned index) {
     // 3. Select a smaller virtqueue size and write it to queue_size.
     virtio_reg_write32(VIRTIO_REG_QUEUE_NUM, VIRTQ_ENTRY_NUM);
 
-    // 4. Allocate and zero Descriptor Table, Available and Used rings for the
-    // virtqueue in contiguous physical memory, on a 4096 byte alignment
-    virtio_reg_write32(VIRTIO_REG_QUEUE_PFN, paddr / PAGE_SIZE);
+    // 4. Allocate and zero Descriptor Table, Available and Used rings for the virtqueue in physical memory.
+
+    // allocating the queue
+    paddr_t paddr = pool_alloc_pages();
+    struct virtio_virtq *vq = (struct virtio_virtq *) paddr;
+
+    // remembers which queue this is,
+    vq->queue_index = index;
+    // a shortcut pointer to the device-written counter used.index
+    vq->used_index = (volatile uint16_t *) &vq->used.index;
+
+    // Descriptor Table Area
+    uint64_t virtq_desc_table = paddr + offsetof(struct virtio_virtq, descs);
+    virtio_reg_write32(VIRTIO_REG_QUEUE_DESC_LOW, virtq_desc_table);
+    virtio_reg_write32(VIRTIO_REG_QUEUE_DESC_HIGH, virtq_desc_table >> 32);
+
+    // Available Ring Area
+    uint64_t virtq_avail_ring = paddr + offsetof(struct virtio_virtq, avail);
+    virtio_reg_write32(VIRTIO_REG_DRIVER_DESC_LOW, virtq_avail_ring);
+    virtio_reg_write32(VIRTIO_REG_DRIVER_DESC_HIGH, virtq_avail_ring >> 32);
+
+    // Used Ring Area
+    uint64_t virtq_used_ring = paddr + offsetof(struct virtio_virtq, used);
+    virtio_reg_write32(VIRTIO_REG_DEVICE_DESC_LOW, virtq_used_ring);
+    virtio_reg_write32(VIRTIO_REG_DEVICE_DESC_HIGH, virtq_used_ring >> 32);
 
     return vq;
 }
@@ -66,7 +83,7 @@ void virtio_blk_init(void) {
     // Sanity Checks
     if (virtio_reg_read32(VIRTIO_REG_MAGIC) != 0x74726976)
         PANIC("VIRTIO: invalid magic number!");
-    if (virtio_reg_read32(VIRTIO_REG_VERSION) != 1)
+    if (virtio_reg_read32(VIRTIO_REG_VERSION) != 2)
         PANIC("VIRTIO: invalid version!");
     if (virtio_reg_read32(VIRTIO_REG_DEVICE_ID) != VIRTIO_DEVICE_BLK)  // Device ID is 2: it’s a disk
         PANIC("VIRTIO: invalid device id!");
@@ -74,17 +91,44 @@ void virtio_blk_init(void) {
     // The initialization process as described in the specs
     // 1. RESET the device
     virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, 0);
-    // 2. Set the ACKNOWLEDGE status bit: "I see you"
+    // 2. i. Set the ACKNOWLEDGE status bit: "I see you"
     virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACK);
-    // 3. Set the DRIVER status bit: "I know how to drive you"
+    // 2. ii. Set the DRIVER status bit: "I know how to drive you"
     virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER);
-    // 4. i. Tell the device our PAGE_SIZE
-    virtio_reg_write32(VIRTIO_REG_PAGE_SIZE, PAGE_SIZE);
-    // 4. ii. Initialize the Queue
+
+    // 3. Agree on features	Pick optional extras (MODERN)
+    // 3. i. Read device feature bits
+    // Reading from DEVICE_FEATURES register returns 32 consecutive flag bits.
+    // feature bits 0 to 31 if DEVICE_FEATURES_SEL is set to 0 and
+    // features bits 32 to 63 if DeviceFeaturesSel is set to 1
+    virtio_reg_write32(VIRTIO_REG_DEVICE_FEATURES_SEL, 0);    // feature_low
+    uint64_t offered = virtio_reg_read32(VIRTIO_REG_DEVICE_FEATURES);
+    virtio_reg_write32(VIRTIO_REG_DEVICE_FEATURES_SEL, 1);    // feature_high
+    offered |= (uint64_t) virtio_reg_read32(VIRTIO_REG_DEVICE_FEATURES) << 32;
+
+    // Accept the feature
+    uint64_t accepted = offered & (1ULL << VIRTIO_F_VERSION_1);
+    if (!(accepted & (1ULL << VIRTIO_F_VERSION_1)))
+        PANIC("VIRTIO: device does not offer VERSION_1");
+
+    // 3. ii. Write the subset of feature bits understood by the OS and driver to the device
+    virtio_reg_write32(VIRTIO_REG_DRIVER_FEATURES_SEL, 0);    // feature_low
+    virtio_reg_write32(VIRTIO_REG_DRIVER_FEATURES, (uint32_t) accepted);
+    virtio_reg_write32(VIRTIO_REG_DRIVER_FEATURES_SEL, 1);    // feature_high
+    virtio_reg_write32(VIRTIO_REG_DRIVER_FEATURES, (uint32_t) (accepted >> 32));
+
+    // 4. i. Set the FEATURES_OK status bit (Tell the diver negotiation is complete)
+    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_FEATURES_OK);
+    // 4. ii. Re-read device status to ensure the FEATURES_OK bit is still set (Confirm with the driver)
+    if (!(virtio_reg_read32(VIRTIO_REG_DEVICE_STATUS) & VIRTIO_STATUS_FEATURES_OK))
+        PANIC("VIRTIO: device rejected our features");
+
+    // 5. i. Initialize the Queue
     blk_request_vq = virtq_init(0);
-    // 5. Agree on features	Pick optional extras -- Skipped
-    // 6. Set the DRIVER_OK status bit: “Setup done, start working”
-    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER_OK);
+
+    // Allocate the request buffer i.e region to store requests on the device
+    blk_req_paddr = pool_alloc_pages();
+    blk_req = (struct virtio_blk_req *) blk_req_paddr;
 
     // Reading the disk’s capacity. Starting at offset 0x100, each device type has its own config area.
     // For a virtio disk, the first field is the capacity, measured in 512-byte sectors.
@@ -92,11 +136,11 @@ void virtio_blk_init(void) {
     blk_capacity = virtio_reg_read64(VIRTIO_REG_DEVICE_CONFIG + 0) * SECTOR_SIZE;
     // printf("VIRTIO: Block size is %d\n", (int) blk_capacity);
 
-    // Allocate the request buffer i.e region to store requests on the device
-    blk_req_paddr = alloc_pages(align_up(sizeof(*blk_req), PAGE_SIZE) / PAGE_SIZE);
-    blk_req = (struct virtio_blk_req *) blk_req_paddr;
+    // 5. ii. Set the QUEUE READY
+    virtio_reg_write32(VIRTIO_REG_QUEUE_READY, 0x1);
 
-
+    // 6. Set the DRIVER_OK status bit: “Setup done, start working”
+    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER_OK);
 }
 
 /* Sending I/0 Requests */

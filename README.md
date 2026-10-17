@@ -16,8 +16,8 @@ Work in progress. Checked items work today; unchecked items are planned.
   - [ ] Preemptive scheduling with timer interrupts
 - [x] **User mode**: the shell runs in `U-mode` and is embedded in the kernel image
   - [ ] Load user programs from the disk instead of embedding them
-- [x] **Disk**: `virtio-blk` driver (currently legacy MMIO interface)
-  - [ ] Modern (virtio 1.0) MMIO interface
+- [x] **Disk**: ~`virtio-blk` driver (currently legacy MMIO interface)~
+  - [x] `virtio-blk` driver modern (virtio 1.0) MMIO interface
 - [x] **File system**: files stored in a tar archive on the disk, which can be read, written, listed and removed
 - [x] **Shell** commands: `echo`, `ls`, `cat`, `write`, `rm`, `exit`
 
